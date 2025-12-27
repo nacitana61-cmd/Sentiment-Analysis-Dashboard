@@ -3,3 +3,6 @@ pandas
 transformers
 torch
 altair
+wordcloud
+matplotlib
+plotly

@@ -83,8 +83,3 @@ elif source_choice == "Reviews":
         gc.collect()
     else:
         st.warning(f"No reviews found for {selected_month}.")
-        # FINAL CLEANUP
-        gc.collect() 
-    else:
-        st.warning("No data.")
-

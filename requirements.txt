@@ -1,7 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.1+cpu
+torchvision==0.17.1+cpu
 streamlit
 pandas
 transformers
-torch
 altair
-wordcloud
-matplotlib

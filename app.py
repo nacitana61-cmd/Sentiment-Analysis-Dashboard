@@ -4,113 +4,181 @@ from transformers import pipeline
 import altair as alt
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-import os
 
-# 1. Page Configuration
-st.set_page_config(page_title="Brand Sentiment Dashboard", layout="wide")
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
+st.set_page_config(
+    page_title="Brand Sentiment Dashboard",
+    layout="wide"
+)
 
-# 2. Optimized Sentiment Analysis Function
-# Using a fine-tuned TinyBERT model to stay under 512MB RAM
+# --------------------------------------------------
+# CONSTANTS (SAFE LIMITS FOR RENDER)
+# --------------------------------------------------
+MAX_REVIEWS = 200          # reduce if memory issues persist
+SENTIMENT_BATCH_SIZE = 16 # small batches = low memory
+
+# --------------------------------------------------
+# LOAD SENTIMENT MODEL (CACHED, CPU ONLY)
+# --------------------------------------------------
 @st.cache_resource
 def load_sentiment_model():
     return pipeline(
-        "sentiment-analysis", 
-        model="cross-encoder/ms-marco-TinyBERT-L-2-v2", 
-        device=-1 
+        "sentiment-analysis",
+        model="distilbert-base-uncased-finetuned-sst-2-english",
+        device=-1  # force CPU (important for Render)
     )
 
-# 3. Sidebar Navigation
-st.sidebar.title("Navigation")
-source_choice = st.sidebar.radio("Go to:", ["Products", "Testimonials", "Reviews"])
+sentiment_analyzer = load_sentiment_model()
 
-# Helper function to load data
-def load_data(filename):
-    if not os.path.exists(filename):
-        return pd.DataFrame()
-    df = pd.read_csv(filename)
-    # Ensure date column is properly formatted
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['month'] = df['date'].dt.month_name()
+# --------------------------------------------------
+# DATA LOADING (CACHED)
+# --------------------------------------------------
+@st.cache_data
+def load_reviews():
+    df = pd.read_csv("reviews.csv")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df["month"] = pd.to_datetime(df["date"]).dt.month_name()
     return df
 
-# --- MAIN DASHBOARD LOGIC ---
+@st.cache_data
+def load_products():
+    return pd.read_csv("products.csv")
 
+@st.cache_data
+def load_testimonials():
+    return pd.read_csv("testimonials.csv")
+
+# --------------------------------------------------
+# SENTIMENT BATCHING FUNCTION
+# --------------------------------------------------
+def run_sentiment_in_batches(texts, batch_size=SENTIMENT_BATCH_SIZE):
+    results = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        results.extend(sentiment_analyzer(batch))
+    return results
+
+# --------------------------------------------------
+# SIDEBAR NAVIGATION
+# --------------------------------------------------
+st.sidebar.title("Navigation")
+source_choice = st.sidebar.radio(
+    "Go to:",
+    ["Products", "Testimonials", "Reviews"]
+)
+
+# --------------------------------------------------
+# PRODUCTS VIEW
+# --------------------------------------------------
 if source_choice == "Products":
     st.title("📦 Scraped Products")
-    if os.path.exists("products.csv"):
-        st.dataframe(pd.read_csv("products.csv"), use_container_width=True)
-    else:
-        st.error("File 'products.csv' not found. Please upload it to your GitHub.")
+    df_prod = load_products()
+    st.dataframe(df_prod, use_container_width=True)
 
+# --------------------------------------------------
+# TESTIMONIALS VIEW
+# --------------------------------------------------
 elif source_choice == "Testimonials":
     st.title("💬 Scraped Testimonials")
-    if os.path.exists("testimonials.csv"):
-        st.dataframe(pd.read_csv("testimonials.csv"), use_container_width=True)
-    else:
-        st.error("File 'testimonials.csv' not found. Please upload it to your GitHub.")
+    df_test = load_testimonials()
+    st.dataframe(df_test, use_container_width=True)
 
+# --------------------------------------------------
+# REVIEWS + SENTIMENT VIEW
+# --------------------------------------------------
 elif source_choice == "Reviews":
     st.title("⭐ Reviews Sentiment Analysis")
-    
-    # Lazy Load Model: Only loads when user visits this tab to save RAM
-    with st.spinner("Initializing AI Model..."):
-        sentiment_analyzer = load_sentiment_model()
 
-    df_rev = load_data("reviews.csv")
-    
-    if not df_rev.empty:
-        # Month Filter Slider
-        months = ["January", "February", "March", "April", "May", "June", 
-                  "July", "August", "September", "October", "November", "December"]
-        selected_month = st.select_slider("Select a month to analyze:", options=months, value="May")
-        
-        # Filter Data
-        filtered_df = df_rev[df_rev['month'] == selected_month].copy()
+    df_rev = load_reviews()
 
-        if not filtered_df.empty:
-            with st.spinner(f'AI is analyzing {len(filtered_df)} reviews for {selected_month}...'):
-                # Run the prediction
-                results = sentiment_analyzer(filtered_df['review'].tolist())
-                
-                # Map scores to labels for the report
-                sentiments = []
-                confidences = []
-                for res in results:
-                    # This specific model uses raw scores; > 0 is generally positive
-                    if res['score'] > 0:
-                        sentiments.append('POSITIVE')
-                    else:
-                        sentiments.append('NEGATIVE')
-                    confidences.append(abs(res['score']))
-                
-                filtered_df['Sentiment'] = sentiments
-                filtered_df['Confidence'] = confidences
+    # Month selector
+    months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ]
 
-            # 4. DATA VISUALIZATION
-            st.subheader(f"Sentiment Results: {selected_month} 2023")
-            
-            # Sentiment Bar Chart
-            chart_data = filtered_df.groupby('Sentiment').size().reset_index(name='Count')
-            bar_chart = alt.Chart(chart_data).mark_bar().encode(
-                x='Sentiment',
-                y='Count',
-                color='Sentiment'
-            ).properties(height=350)
-            st.altair_chart(bar_chart, use_container_width=True)
+    selected_month = st.select_slider(
+        "Select a month in 2023:",
+        options=months,
+        value="May"
+    )
 
-            # Bonus: Word Cloud
-            st.subheader("Key Topics (Word Cloud)")
-            text = " ".join(filtered_df['review'].astype(str).tolist())
-            wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
-            fig, ax = plt.subplots()
-            ax.imshow(wordcloud, interpolation='bilinear')
-            ax.axis("off")
-            st.pyplot(fig)
-            
-            # Detailed Data Table
-            st.write("Detailed Breakdown:")
-            st.dataframe(filtered_df[['date', 'review', 'Sentiment', 'Confidence']], use_container_width=True)
-        else:
-            st.warning(f"No reviews found in the dataset for {selected_month}.")
-    else:
-        st.error("reviews.csv is missing or empty.")
+    filtered_df = df_rev[df_rev["month"] == selected_month].copy()
+    filtered_df = filtered_df.head(MAX_REVIEWS)  # MEMORY LIMIT
+
+    if filtered_df.empty:
+        st.warning(f"No reviews found for {selected_month}.")
+        st.stop()
+
+    # --------------------------------------------------
+    # RUN SENTIMENT (BUTTON CONTROLLED)
+    # --------------------------------------------------
+    if st.button("Run Sentiment Analysis"):
+        with st.spinner("Analyzing sentiment..."):
+            results = run_sentiment_in_batches(
+                filtered_df["review"].tolist()
+            )
+
+            filtered_df["Sentiment"] = [r["label"] for r in results]
+            filtered_df["Confidence"] = [r["score"] for r in results]
+
+        # --------------------------------------------------
+        # BAR CHART
+        # --------------------------------------------------
+        st.subheader(f"Sentiment Results for {selected_month} 2023")
+
+        chart_data = (
+            filtered_df
+            .groupby("Sentiment")
+            .agg(
+                Count=("Sentiment", "count"),
+                Confidence=("Confidence", "mean")
+            )
+            .reset_index()
+        )
+
+        bar_chart = alt.Chart(chart_data).mark_bar().encode(
+            x="Sentiment:N",
+            y="Count:Q",
+            color="Sentiment:N",
+            tooltip=[
+                "Sentiment",
+                "Count",
+                alt.Tooltip("Confidence", format=".2%")
+            ]
+        ).properties(
+            width=600,
+            height=400
+        )
+
+        st.altair_chart(bar_chart, use_container_width=True)
+
+        # --------------------------------------------------
+        # WORD CLOUD
+        # --------------------------------------------------
+        st.subheader("🧠 Review Word Cloud")
+
+        text_blob = " ".join(filtered_df["review"].tolist())
+
+        wordcloud = WordCloud(
+            width=600,
+            height=300,
+            background_color="white",
+            max_words=100
+        ).generate(text_blob)
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.imshow(wordcloud)
+        ax.axis("off")
+        st.pyplot(fig)
+
+        # --------------------------------------------------
+        # RAW DATA TABLE
+        # --------------------------------------------------
+        st.subheader("📄 Detailed Breakdown")
+        st.dataframe(
+            filtered_df[["date", "review", "Sentiment", "Confidence"]],
+            use_container_width=True
+        )

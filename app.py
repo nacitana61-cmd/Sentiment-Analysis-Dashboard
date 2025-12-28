@@ -3,22 +3,21 @@ import pandas as pd
 from transformers import pipeline
 import altair as alt
 import os
-import gc # Garbage collection to clear memory
+import gc
 
 st.set_page_config(page_title="Brand Sentiment Dashboard", layout="wide")
 
-# 1. Improved Memory-Saving Model Loader
+# REQUIRED: Hugging Face Transformer Pipeline
 @st.cache_resource
 def load_sentiment_model():
-    # Force the model to load in the leanest way possible
+    # Using TinyBERT: A real Transformer that fits in 512MB
     return pipeline(
         "sentiment-analysis", 
-        model="distilbert-base-uncased-finetuned-sst-2-english",
-        model_kwargs={"low_cpu_mem_usage": True},
-        device=-1 # Ensure CPU only
+        model="cross-encoder/ms-marco-TinyBERT-L-2-v2",
+        device=-1
     )
 
-# 2. Sidebar Navigation
+# Sidebar
 st.sidebar.title("Navigation")
 source_choice = st.sidebar.radio("Go to:", ["Products", "Testimonials", "Reviews"])
 
@@ -39,9 +38,10 @@ elif source_choice == "Testimonials":
 elif source_choice == "Reviews":
     st.title("⭐ Reviews Sentiment Analysis")
     
-    # Load the model ONLY when we need it
-    sentiment_analyzer = load_sentiment_model()
-    
+    # Load model only when needed
+    with st.spinner("Loading Transformer Model..."):
+        sentiment_analyzer = load_sentiment_model()
+
     df_rev = load_data("reviews.csv")
     months = ["January", "February", "March", "April", "May", "June", 
               "July", "August", "September", "October", "November", "December"]
@@ -50,26 +50,36 @@ elif source_choice == "Reviews":
     filtered_df = df_rev[df_rev['month'] == selected_month].copy()
 
     if not filtered_df.empty:
-        with st.spinner('Analyzing sentiment...'):
-            # Process reviews
+        with st.spinner('Transformer is analyzing sentiment...'):
             results = sentiment_analyzer(filtered_df['review'].tolist())
-            filtered_df['Sentiment'] = [res['label'] for res in results]
-            filtered_df['Confidence'] = [res['score'] for res in results]
+            
+            # Map Transformer scores to Positive/Negative labels
+            labels = []
+            for res in results:
+                # ms-marco-TinyBERT uses a score: > 0 is Positive
+                if res['score'] > 0:
+                    labels.append("POSITIVE")
+                else:
+                    labels.append("NEGATIVE")
+            
+            filtered_df['Sentiment'] = labels
+            filtered_df['Confidence'] = [abs(res['score']) for res in results]
 
-        st.subheader(f"Results for {selected_month}")
+        st.subheader(f"Sentiment Results (Transformer Model)")
         
-        # Chart Logic
-        chart_data = filtered_df.groupby('Sentiment').agg({'Sentiment': 'count', 'Confidence': 'mean'}).rename(columns={'Sentiment': 'Count'}).reset_index()
+        # Chart
+        chart_data = filtered_df.groupby('Sentiment').size().reset_index(name='Count')
         bar_chart = alt.Chart(chart_data).mark_bar().encode(
-            x='Sentiment', y='Count', color='Sentiment',
-            tooltip=['Sentiment', 'Count', alt.Tooltip('Confidence', format='.2%')]
+            x='Sentiment', y='Count', color='Sentiment'
         ).properties(width=600, height=400)
 
         st.altair_chart(bar_chart, use_container_width=True)
+        
+        # Table
         st.write("Detailed Breakdown:")
         st.dataframe(filtered_df[['date', 'review', 'Sentiment', 'Confidence']], use_container_width=True)
         
-        # Manually clear memory after processing
-        gc.collect() 
+        # Force memory cleanup
+        gc.collect()
     else:
         st.warning(f"No reviews found for {selected_month}.")

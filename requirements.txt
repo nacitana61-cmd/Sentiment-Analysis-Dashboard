@@ -4,5 +4,3 @@ streamlit
 pandas
 transformers
 altair
-wordcloud
-matplotlib
